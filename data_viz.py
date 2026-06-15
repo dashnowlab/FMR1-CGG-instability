@@ -124,6 +124,7 @@ def plot_bqsvsbms(read_bqs, read_bms, title, filename="readbasequal-methcall-wat
     cbar_bq.set_label('Base quality', fontsize=14, fontname='Arial')
 
     vcolors = [
+        # (-1.0, "#939393"),  # Grey for flank bases
         (0.0, "#eeeeee"),  # White at 0
         (0.001, "#50b7bc"),   # Blue at 1
         (0.5, "white"),   # Blue at 1

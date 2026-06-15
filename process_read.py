@@ -1,5 +1,70 @@
 from lib_ssw.pyssw import align_pair
 from cigar_utils import convert_cigar, complement_cigar
+import re
+
+
+def reverse_complement(seq):
+    complement = str.maketrans('ACGTNacgtn', 'TGCANtgcan')
+    return seq.translate(complement)[::-1]
+
+
+def parse_modified_bases_from_tags(mm_tag, ml_tag, read):
+    """
+    Reconstructs pysam-like read.modified_bases dict
+    from MM (modified bases) and ML (likelihoods) tags.
+
+    Returns:
+        { (base, mod_code, strand): [(position, likelihood), ...] }
+    """
+
+    if mm_tag is None:
+        return {}
+
+    # normalize ML to list
+    if ml_tag is None:
+        ml_vals = []
+    elif isinstance(ml_tag, int):
+        ml_vals = [ml_tag]
+    else:
+        ml_vals = list(ml_tag)
+
+    ml_index = 0
+    result = {}
+
+    # MM has sections separated by ';'
+    # each section encodes a modification type and delta positions
+    # example: C+m?,0,5,3;
+    sections = [s for s in mm_tag.split(';') if s]
+    for section in sections:
+        # parse header before commas: e.g., C+m?, C+h, A+a?
+        if "," not in section: continue
+        m = re.match(r'^([ACGTN])([+-])([A-Za-z?])(.*)$', section.replace(",", "", 1))
+        if not m:
+            continue
+        base = section[0]                      # e.g., 'C'
+        strand = section[1]                    # '+' or '-'
+        mod_code = section[2]                  # e.g., 'm','h','?'
+
+        strand = 0 if strand == '-' else 1
+        key = (base, strand, mod_code)
+
+        # extract all deltas after first comma
+        # grab section starting after first comma
+        deltas_part = section.split(',', 1)[1]
+        deltas = [int(x) for x in deltas_part.split(',') if x != '']
+
+        positions = []
+        pos = 0  # deltas are relative; start -1 then add first delta
+
+        ml_index = 0
+        for d in deltas:
+            likelihood = ml_vals[ml_index] if ml_index < len(ml_vals) else None
+            ml_index += 1
+            positions.append((pos, likelihood))
+
+        result.setdefault(key, []).extend(positions)
+
+    return result
 
 
 def detect_flank(read, fasta, flank_len, repeat_start, repeat_end):
@@ -16,6 +81,7 @@ def detect_flank(read, fasta, flank_len, repeat_start, repeat_end):
             start and end coordinates of the flanking sequence in the read
             sub_cigar: CIGAR string of the repeat alignment to the reference in the read
     """
+    print(f"Detecting flanks for read {read.query_name} at reference positions {repeat_start}-{repeat_end}")
 
     sub_cigar = ''
 
@@ -112,6 +178,7 @@ def detect_flank(read, fasta, flank_len, repeat_start, repeat_end):
         sub_cigar += f'{allele_length - target_end}I'
 
     # sub_cigar += dflank_cigar
+    print(f"Read {read.query_name} - Upstream flank: {upstream}, Downstream flank: {downstream}, Sub CIGAR: {sub_cigar}")
 
     return [start_idx, end_idx, sub_cigar]
 
@@ -137,6 +204,7 @@ def parse_cigar(read, repeat_start, repeat_end, fasta, flank_len=50, motif_lengt
     rpos = read.reference_start   # NOTE: The coordinates are 1 based in SAM; but pySAM uses 0 based
     qpos = 0            # starts from 0 the sub string the read sequence in python
 
+    read_rpos = []
     # the read start and the repeat start are both on a 0 based coordinate system
 
     start_idx = -1; end_idx = -1
@@ -177,7 +245,6 @@ def parse_cigar(read, repeat_start, repeat_end, fasta, flank_len=50, motif_lengt
             if insert_length > motif_length and \
                (repeat_start - flank_len <= rpos <= repeat_start-1 or \
                 repeat_end + 1 <= rpos <= repeat_end + flank_len):
-                print("Detecting flanks from insertion.")
                 # process the read to identify the flanking sequences
                 start_idx, end_idx, sub_cigar = detect_flank(read, fasta, flank_len, repeat_start, repeat_end)
                 return [start_idx, end_idx, sub_cigar]
@@ -232,14 +299,16 @@ def get_perbase_methylation(read, start_idx, end_idx):
         list of methylation levels for each base in the read
     """
 
-    pass
     # Get methylation
-    mods = read.modified_bases  # mods are a dict of base modifications
     # dict (canonical base, strand, modification) -> list of tuples (position, quality)
     read_bms = [0]*(end_idx-start_idx); read_bmc = [0]*(end_idx-start_idx)
     called_bases = 0; ambiguous_bases = 0
     methylated_bases = 0; unmethylated_bases = 0
 
+    if read.query_name == 'm84082_250131_064648_s1/116852188/ccs': # read exception with invalid MM tag
+        return [read_bms, read_bmc, called_bases, ambiguous_bases, methylated_bases, unmethylated_bases]
+
+    mods = read.modified_bases  # mods are a dict of base modifications
     if mods is None or len(mods) == 0:
         return [read_bms, read_bmc, called_bases, ambiguous_bases, methylated_bases, unmethylated_bases]
 

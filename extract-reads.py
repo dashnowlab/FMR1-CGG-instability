@@ -2,9 +2,6 @@ import pysam
 import os, sys, argparse
 import statistics as stats
 import numpy as np
-import matplotlib.pyplot as plt
-from collections import Counter
-from tqdm import tqdm
 
 from data_viz import *
 from process_read import *
@@ -37,7 +34,12 @@ def parse_args():
     return args
 
 
-def bam_check_tags(bam_file, format):
+def count_mm_positions(mm_string):
+    # crude but works: count commas
+    return mm_string.count(",") if mm_string else 0
+
+
+def bam_check_tags(bam_file, format, args):
     """
     Check if the BAM files have the required tags for ATaRVa.
     
@@ -50,11 +52,14 @@ def bam_check_tags(bam_file, format):
     Raises:
         ValueError: If the BAM file does not contain the required tags.
     """
-    
+    print(f"Checking alignment tags in {os.path.basename(bam_file)}", file=sys.stderr)
     sample_size = 1000 # sample size of reads to check for tags
     
     reads_sampled = 0 # sample set of reads to look for tags
-    aln_file = pysam.AlignmentFile(bam_file, format)
+    if format == 'rc':
+        aln_file = pysam.AlignmentFile(bam_file, format, reference_filename=args.ref_fasta, check_sq=False)
+    else:
+        aln_file = pysam.AlignmentFile(bam_file, format, check_sq=False)
     cs_tag = False; md_tag = False; cigar_tag = False
     
     for read in aln_file.fetch():
@@ -72,6 +77,9 @@ def bam_check_tags(bam_file, format):
         
         elif read.has_tag('MD'):
             md_tag = True
+        
+        if reads_sampled >= sample_size:
+            break
 
     aln_file.close()
 
@@ -98,9 +106,16 @@ def extract_reads(args, aln_format):
         except AttributeError:
             bam_id = os.path.basename(bam_file).split('.')[0]
         if bam_id not in bam_aln_tags:
-            bam_aln_tags[bam_id] = bam_check_tags(bam_file, aln_format)
+            bam_aln_tags[bam_id] = bam_check_tags(bam_file, aln_format, args)
 
-    bams = [pysam.AlignmentFile(bam_file, aln_format, check_sq=False) for bam_file in args.bam]
+    # bams = [pysam.AlignmentFile(bam_file, aln_format, check_sq=False) for bam_file in args.bam]
+    bams = []
+    for bam_file in args.bam:
+        if aln_format == 'rc':
+            bam = pysam.AlignmentFile(bam_file, aln_format, reference_filename=args.ref_fasta, check_sq=False)
+        else:
+            bam = pysam.AlignmentFile(bam_file, aln_format, check_sq=False)
+        bams.append(bam)
     fasta = pysam.FastaFile(args.ref_fasta)
 
     if args.output is not None:
@@ -112,13 +127,13 @@ def extract_reads(args, aln_format):
     read_methylation = []
 
     bam_names = {}
-    with open('./samples.tsv') as fh:
+    with open('./sample-metadata.tsv') as fh:
         header = fh.readline().strip().split('\t')
         for line in fh:
             line = line.strip().split('\t')
-            bam_names[line[-1]] = f'{line[2]} {line[3]}'
+            bam_names[line[-2]] = f'{line[2]}'
 
-    header = ['#bam_id', 'loc_id', 'read_id', 'read_repeat_start', 'read_repeat_end', 'allele_length', 'base_qual']
+    header = ['#bam_id', 'loc_id', 'read_id', 'read_repeat_start', 'read_repeat_end', 'allele_length', 'base_qual', 'trgt_haplotype', 'direction']
     if args.add_cigar: header += ['cigar']
     if args.haplotag is not None: header += ['haplotype']
     if args.analyse_methylation:
@@ -135,6 +150,7 @@ def extract_reads(args, aln_format):
             sample_allele_counts = {}
 
             for bam in bams:
+                bam_file = bam.filename
                 # Getting the base file name
                 try:
                     bam_id = os.path.basename(bam_file).decode('utf-8').split('.')[0]
@@ -172,8 +188,6 @@ def extract_reads(args, aln_format):
 
                     if np.mean(base_qualities) < 25: continue  # filter out low quality reads
 
-                    sample_reads_bqs.append(list(base_qualities))
-                    
                     if args.allele_bases:
                         allele_len = (end_idx - start_idx)
                     else:
@@ -184,7 +198,18 @@ def extract_reads(args, aln_format):
                                       allele_len, round(np.mean(read.query_qualities[start_idx:end_idx]), 2)])
                     if args.add_cigar: read_data[-1].append(sub_cigar)
 
-                    if args.analyse_methylation:
+                    # Get AL tag added by TRGT
+                    if read.has_tag('AL'):
+                        read_data[-1].append(read.get_tag('AL'))
+                    else: read_data[-1].append('NA')
+
+                    if read.is_reverse: read_data[-1].append('-')
+                    else: read_data[-1].append('+')
+
+                    read_data[-1].append(read.query_sequence[start_idx:end_idx])
+                    sample_reads_bqs.append((list(base_qualities), read_data[-1][-1]))
+
+                    if args.analyse_methylation and (read.has_tag('MM') and read.has_tag('ML')) and len(read.get_tag('ML')) > 0:
                         # Get methylation
                         read_bms, read_bmc, called_bases, ambiguous_bases, methylated_bases, unmethylated_bases = get_perbase_methylation(read, start_idx, end_idx)
 
@@ -212,14 +237,14 @@ def extract_reads(args, aln_format):
                             read_data[-1].append(read.get_tag(args.haplotag))
                         else:
                             read_data[-1].append('NA')
-
                 for rd in read_data: print(*rd, sep='\t', file=sys.stdout)
 
                 if args.plot:
-                    indices = [i for i, v in sorted(enumerate(sample_reads_bqs), key=lambda x: len(x[1]))]
-                    sample_reads_bqs = [sample_reads_bqs[i] for i in indices]
+                    indices = [i for i, v in sorted(enumerate(sample_reads_bqs), key=lambda x: len(x[1][0]))]
+                    indices = sorted(range(len(sample_reads_bqs)), key=lambda i: len(sample_reads_bqs[i][0]))
+                    sample_reads_bqs = [sample_reads_bqs[i][0] for i in indices]
                     sample_reads_bms = [sample_reads_bms[i] for i in indices]
-                    plot_bqsvsbms(sample_reads_bqs, sample_reads_bms, bam_id, f'{"-".join(bam_names[bam_id].split(" "))}')
+                    plot_bqsvsbms(sample_reads_bqs, sample_reads_bms, bam_id, f'../plots/{"-".join(bam_names[bam_id].split(" "))}')
 
     for bam in bams: bam.close()
     fasta.close()
