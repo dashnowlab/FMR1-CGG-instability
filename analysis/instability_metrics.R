@@ -38,7 +38,7 @@ density_mode <- function(x) {
   d$x[which.max(d$y)]
 }
 
-calc_instability_metrics <- function(df, pm_min = 55, pm_max = 200) {
+calc_instability_metrics <- function(df, pm_min = 55, pm_max = 199) {
   df %>%
     mutate(allele_length = as.numeric(allele_length)) %>%
     filter(
