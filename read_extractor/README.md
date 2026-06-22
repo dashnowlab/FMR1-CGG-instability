@@ -1,4 +1,4 @@
-## Code base for FMR1 somatic instability analysis
+## Read Extractor - Tool developed to extract reads aligned at the FMR1 locus in a BAM file and analyse.
 
 ### Usage:
 
