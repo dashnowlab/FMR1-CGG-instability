@@ -3,7 +3,7 @@
 ## Overview
 The repository contains custom scripts used for extraction, processing, visualization, and analysis of <i>FMR1</i> repeat-length and methylation data generated from PacBio long-read sequencing (PureTarget Repeat Expansion Panel Workflow).
 
-This pipeline operates directly on aligned BAM files to extract and characterize individual <i>FMR1</i>-spanning reads. The workflow was developed to quantify FMR1 somatic instabilty (repeat-length distributions and methylation profiles) at single-molecule resolution.
+This pipeline operates directly on aligned BAM files to extract and characterize individual <i>FMR1</i>-spanning reads. The workflow was developed to quantify <i>FMR1</i> somatic instabilty (repeat-length distributions and methylation profiles) at single-molecule resolution.
 
 The repository accompanies analyses presented in the manuscript below.
 
